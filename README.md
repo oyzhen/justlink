@@ -352,9 +352,9 @@ const sum = await api.$eval(
 );
 ```
 
-#### String form — no `toString()` needed
+#### String form
 
-Sometimes `.toString()` is unavailable (minified code, certain runtimes, CSP restrictions). Pass a string expression or body instead:
+Sometimes `Function.prototype.toString()` isn't available or produces unparseable output — the function has been compiled to V8 bytecode (code cache, snapshot), or the environment has overridden `toString` (JS sandboxes, proxies). In these cases, pass a string expression or body instead:
 
 ```ts
 // Expression — implicit return

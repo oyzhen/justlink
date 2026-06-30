@@ -360,9 +360,9 @@ const sum = await api.$eval(
 );
 ```
 
-#### 字符串形式 — 无需 `toString()`
+#### 字符串形式
 
-当 `.toString()` 不可用时（代码压缩、特定运行环境、CSP 限制），可以直接传字符串表达式或代码体：
+当 `Function.prototype.toString()` 不可用或返回无法解析的内容时——例如函数已被编译为 V8 字节码（代码缓存、快照），或运行环境覆写了 `toString`（JS 沙箱、Proxy 包装）——可以直接传字符串表达式或代码体：
 
 ```ts
 // 表达式 — 隐式 return
