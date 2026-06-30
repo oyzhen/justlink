@@ -117,15 +117,15 @@ type MyApi = RemoteApi<Impl>;
 
 ## Escape hatches on every RemoteApi
 
-| Method                       | Description                                    |
-| ---------------------------- | ---------------------------------------------- |
-| `api.$get(key)`              | Read a remote property dynamically             |
-| `api.$exec(method, ...args)` | Call a method by name                          |
-| `api.$eval(fn, deps?)`       | Run arbitrary code inside the Worker           |
-| `api.$on(event, handler)`    | Subscribe to events (returns unsubscribe fn)   |
-| `api.$off(event, handler)`   | Remove a specific event handler                |
-| `api.$once(event, handler)`  | Subscribe to an event once                     |
-| `api.$terminate()`           | Shut down the Worker, reject all pending calls |
+| Method                       | Description                                                    |
+| ---------------------------- | -------------------------------------------------------------- |
+| `api.$get(key)`              | Read a remote property dynamically                             |
+| `api.$exec(method, ...args)` | Call a method by name                                          |
+| `api.$eval(fn, deps?)`       | Run arbitrary code inside the Worker (function or string form) |
+| `api.$on(event, handler)`    | Subscribe to events (returns unsubscribe fn)                   |
+| `api.$off(event, handler)`   | Remove a specific event handler                                |
+| `api.$once(event, handler)`  | Subscribe to an event once                                     |
+| `api.$terminate()`           | Shut down the Worker, reject all pending calls                 |
 
 ## Emitted Events
 

@@ -146,8 +146,10 @@ agents should load these when relevant:
 
 ## Pitfalls
 
-- `$eval` callbacks are `.toString()` serialized — must be self-contained
+- `$eval` function form is `.toString()` serialized — must be self-contained
   (no closures over non-serializable values). Use `deps` array for dependencies.
+  String form (`$eval<number>('ref.add(a,b)', {a:1, b:2})`) skips toString
+  entirely — use when function serialization is unavailable.
 - `isClonable()` determines if an object can be structured-cloned or must be
   stored as a ref. Arrays with function elements are NOT clonable.
 - `looksLikeRemoteObject()` — objects with `__ref` property are stored as refs

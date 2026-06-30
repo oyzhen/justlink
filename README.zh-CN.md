@@ -360,7 +360,26 @@ const sum = await api.$eval(
 );
 ```
 
-> ⚠️ **注意：** `$eval` 的回调通过 `.toString()` 序列化——**不能使用闭包**（外部变量）。如果需要传值，请使用 `deps` 参数。
+#### 字符串形式 — 无需 `toString()`
+
+当 `.toString()` 不可用时（代码压缩、特定运行环境、CSP 限制），可以直接传字符串表达式或代码体：
+
+```ts
+// 表达式 — 隐式 return
+await api.$eval<number>('ref.add(a, b)', { a: 1, b: 2 });
+await api.$eval('ref.foo + ref.bar');
+
+// 代码体 — 多行逻辑，需要显式 return
+await api.$eval<number>('const x = ref.add(a, b); return x * 2;', { a: 3, b: 4 });
+```
+
+字符串形式会自动根据 `args` 对象的 key 包装成 `(ref, ...keys) => ...` 箭头函数，wire 协议完全一致——expose 端无需任何改动。
+
+- **表达式 vs 代码体判断规则：** 含 `;` 或换行 → 代码体（需要 `return`）；否则 → 表达式（隐式 return）。以声明语句开头（`const`、`let`、`return`、`if`、`throw` 等）也会触发代码体模式。
+- **args 的 key = 变量名：** `args` 对象的 key 会成为函数形参，必须与字符串中的变量名完全一致。
+- **Transferable 自动检测：** `args` 中的值会自动检测 transferable，与函数形式的 `deps` 行为一致。
+
+> ⚠️ **注意：** 两种形式都不支持闭包捕获外部变量。函数形式通过 `.toString()` 序列化；字符串形式无需序列化。通过第二个参数传值——函数形式传数组（`deps`），字符串形式传对象（`args`）。
 
 ### Transferable 对象
 
@@ -575,9 +594,9 @@ npx skills add oyzhen/justlink
 
 ## 限制与注意事项
 
-### `$eval` 闭包不生效
+### `$eval` 函数形式闭包不生效
 
-`$eval` 回调在 Worker 内部被 `.toString()` 序列化后执行 —— 闭包中的外部变量无法传递。请使用 `deps` 数组传参。
+`$eval` 函数回调在 Worker 内部被 `.toString()` 序列化后执行——闭包中的外部变量无法传递。请使用 `deps` 数组或字符串形式传参。
 
 ### `__ref` 对象
 

@@ -365,6 +365,96 @@ export function runImplSuite(createApi: CreateApi) {
                 await cleanup();
             }
         });
+
+        // ──────────────────────────────────────────────────────────────
+        // 5b. $eval string form — no toString() required
+        //     API: $eval<T>(expression, args?) where expression uses
+        //     `ref` as the target and plain variable names for args.
+        //     Internally wrapped into (ref, ...argNames) => expression.
+        // ──────────────────────────────────────────────────────────────
+        it('eval string expression without args', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const result = await api.$eval<number>('ref.add(2, 3)');
+                expect(result).toBe(5);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string expression with named args', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const result = await api.$eval<number>('ref.add(a, b)', { a: 10, b: 20 });
+                expect(result).toBe(30);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string expression with transferable args', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const buf = new Uint8Array([10, 20, 30]);
+                const result = await api.$eval<number>('ref.sumBytes(buf)', { buf });
+                expect(result).toBe(60);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string expression with nested property access', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const result = await api.$eval<number>('ref.add(ref.counter, 1)');
+                expect(typeof result).toBe('number');
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string expression with empty args object', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const result = await api.$eval<number>('ref.add(2, 3)', {});
+                expect(result).toBe(5);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string expression error propagation', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                await expect(api.$eval('throw new Error("string eval error")')).rejects.toThrow('string eval error');
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string body with explicit return', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const result = await api.$eval<number>('const x = ref.add(a, b); return x * 2;', { a: 3, b: 4 });
+                expect(result).toBe(14);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('eval string body with multi-line logic', async () => {
+            const { api, cleanup } = createApi();
+            try {
+                const result = await api.$eval<number>(
+                    'const sum = ref.add(a, b); const doubled = ref.add(sum, sum); return ref.add(doubled, 1);',
+                    { a: 2, b: 3 },
+                );
+                // a=2, b=3 → sum=5, doubled=10, result=11
+                expect(result).toBe(11);
+            } finally {
+                await cleanup();
+            }
+        });
     });
 
     // ────────────────────────────────────────────────────────────────

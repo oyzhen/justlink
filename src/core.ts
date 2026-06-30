@@ -86,6 +86,14 @@ type RemoteControl<T extends Record<string, unknown>, Events extends EventMap = 
     $exec<K extends MethodKeys<T>>(method: K, ...args: SafeParameters<T[K]>): ExecReturnType<T[K]>;
     $eval<R>(callback: (ref: T) => R): Promise<R>;
     $eval<A extends unknown[], R>(callback: (ref: T, ...args: A) => R, deps?: A): Promise<R>;
+    /**
+     * String form — no toString() required.
+     * - Expression: `$eval<number>('ref.add(a, b)', { a: 1, b: 2 })`
+     * - Body (multi-line): `$eval<number>('const x = ref.add(a, b); return x * 2;', { a: 1, b: 2 })`
+     * `ref` is the target object; named keys from `args` become function parameters.
+     */
+    $eval<R = unknown>(template: string): Promise<R>;
+    $eval<R = unknown>(template: string, args: Record<string, unknown>): Promise<R>;
     $on<K extends keyof Events & string>(eventName: K, handler: (...args: Events[K]) => void): () => void;
     $off<K extends keyof Events & string>(eventName: K, handler: (...args: Events[K]) => void): void;
     $once<K extends keyof Events & string>(eventName: K, handler: (...args: Events[K]) => void): void;
@@ -385,12 +393,11 @@ export const createWrap =
                                     });
                             }
                             if (prop === '$eval') {
-                                return (callback: (ref: unknown) => unknown, deps?: unknown[]) =>
+                                return (callback: ((ref: unknown) => unknown) | string, argsOrDeps?: Record<string, unknown> | unknown[]) =>
                                     resolver().then(value => {
                                         const targetRef = getRefId(value, ownerRef);
-                                        const serialized = callback.toString();
-                                        const transferList = collectTransferables(deps);
-                                        return request(OP_EVAL, targetRef, { callback: serialized, deps: deps ?? [] }, transferList);
+                                        const { wrapped, deps, transferList } = prepareEval(callback, argsOrDeps);
+                                        return request(OP_EVAL, targetRef, { callback: wrapped, deps }, transferList);
                                     });
                             }
                             if (typeof prop !== 'string') {
@@ -424,10 +431,9 @@ export const createWrap =
                         };
                     }
                     if (prop === '$eval') {
-                        return (callback: (ref: unknown) => unknown, deps?: unknown[]) => {
-                            const serialized = callback.toString();
-                            const transferList = collectTransferables(deps);
-                            return request(OP_EVAL, refId, { callback: serialized, deps: deps ?? [] }, transferList);
+                        return (callback: ((ref: unknown) => unknown) | string, argsOrDeps?: Record<string, unknown> | unknown[]) => {
+                            const { wrapped, deps, transferList } = prepareEval(callback, argsOrDeps);
+                            return request(OP_EVAL, refId, { callback: wrapped, deps }, transferList);
                         };
                     }
                     if (prop === '$terminate') {
@@ -587,6 +593,30 @@ function isTransferable(value: unknown): value is Transferable {
         (hasImageBitmap && value instanceof ImageBitmap) ||
         (hasOffscreenCanvas && value instanceof OffscreenCanvas)
     );
+}
+
+function prepareEval(
+    callback: ((ref: unknown) => unknown) | string,
+    argsOrDeps?: Record<string, unknown> | unknown[],
+): { wrapped: string; deps: unknown[]; transferList: TransferList } {
+    if (typeof callback === 'string') {
+        // String form: wrap expression or body into arrow function.
+        // - Expression: `ref.add(a, b)` → `(ref, a, b) => (ref.add(a, b))`
+        // - Body:       `const x = ref.add(a, b); return x * 2;` → `(ref, a, b) => { const x = ref.add(a, b); return x * 2; }`
+        const keys = argsOrDeps && !Array.isArray(argsOrDeps) ? Object.keys(argsOrDeps) : [];
+        const values = argsOrDeps && !Array.isArray(argsOrDeps) ? Object.values(argsOrDeps) : [];
+        const params = ['ref', ...keys].join(', ');
+        const bodyRe = /^(throw|if|for|while|switch|try|catch|finally|do|return|let|const|var|function|with)\b/;
+        const isBody = /[;\n]/.test(callback) || bodyRe.test(callback.trim());
+        const wrapped = isBody ? `(${params}) => { ${callback} }` : `(${params}) => (${callback})`;
+        const transferList = collectTransferables(values);
+        return { wrapped, deps: values, transferList };
+    }
+    // Function form: existing toString() serialization.
+    const deps = argsOrDeps as unknown[] | undefined;
+    const wrapped = callback.toString();
+    const transferList = collectTransferables(deps);
+    return { wrapped, deps: deps ?? [], transferList };
 }
 
 function collectTransferables(value: unknown, seen = new Set<unknown>()): TransferList {

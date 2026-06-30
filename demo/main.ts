@@ -68,12 +68,18 @@ async function runBasicDemo() {
     log('BASIC', 'api.math.add(10)', await mathDirect.add(10));
 
     // ── $eval ──────────────────────────────────────────────────────
-    log('BASIC', 'api.$eval(add)', await api.$eval(ref => ref.add(2, 3)));
+    // Function form (auto toString)
+    log('BASIC', 'api.$eval(fn)', await api.$eval(ref => ref.add(2, 3)));
 
     {
         const evalBuf = new Uint8Array([10, 20, 30]);
-        log('BASIC', 'api.$eval(sumBytes)', await api.$eval((ref, b) => ref.sumBytes(b), [evalBuf]));
+        log('BASIC', 'api.$eval(fn, deps)', await api.$eval((ref, b) => ref.sumBytes(b), [evalBuf]));
     }
+
+    // String form — no toString() required, works when function serialization is unavailable
+    log('BASIC', 'api.$eval(str expr)', await api.$eval<number>('ref.add(2, 3)'));
+    log('BASIC', 'api.$eval(str, args)', await api.$eval<number>('ref.add(a, b)', { a: 10, b: 20 }));
+    log('BASIC', 'api.$eval(str body)', await api.$eval<number>('const x = ref.add(a, b); return x * 2;', { a: 3, b: 4 }));
 
     // ── returned object with methods + this binding ────────────────
     const obj = await api.$exec('fn2');

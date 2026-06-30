@@ -352,7 +352,26 @@ const sum = await api.$eval(
 );
 ```
 
-> ⚠️ **Important:** `$eval` callbacks are serialized via `.toString()` — **closures don't work** (no external variables). Use the `deps` parameter to pass values in.
+#### String form — no `toString()` needed
+
+Sometimes `.toString()` is unavailable (minified code, certain runtimes, CSP restrictions). Pass a string expression or body instead:
+
+```ts
+// Expression — implicit return
+await api.$eval<number>('ref.add(a, b)', { a: 1, b: 2 });
+await api.$eval('ref.foo + ref.bar');
+
+// Body — explicit return for multi-line logic
+await api.$eval<number>('const x = ref.add(a, b); return x * 2;', { a: 3, b: 4 });
+```
+
+The string form is automatically wrapped into `(ref, ...keys) => ...` based on the keys of the `args` object, so the wire protocol is identical — expose-side zero changes.
+
+- **Expression vs body detection:** contains `;` or newline → body (needs `return`); otherwise → expression (implicit return). Statement keywords at the start (`const`, `let`, `return`, `if`, `throw`, …) also trigger body mode.
+- **Args keys = variable names:** the keys in `args` become function parameters and must exactly match the variable names in the string.
+- **Transferable auto-detection:** values in `args` are scanned for transferables just like the function form's `deps` array.
+
+> ⚠️ **Important:** Neither form supports closures over external variables. The function form serializes via `.toString()`; the string form requires no serialization. Pass data in via the second argument — an array (`deps`) for the function form, or an object (`args`) for the string form.
 
 ### Transferable Objects
 
@@ -571,9 +590,9 @@ npx skills add oyzhen/justlink
 
 ## Limitations & Gotchas
 
-### `$eval` closures don't work
+### `$eval` function form closures don't work
 
-`$eval` callbacks are `.toString()` serialized and executed in the Worker — closures over external variables don't survive the trip. Use the `deps` array to pass data in.
+`$eval` function callbacks are `.toString()` serialized and executed in the Worker — closures over external variables don't survive the trip. Use the `deps` array or the string form to pass data in.
 
 ### `__ref` objects
 
