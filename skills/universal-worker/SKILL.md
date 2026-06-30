@@ -219,3 +219,80 @@ await api.$terminate();
   block. Use it only for environments where Worker is genuinely unavailable.
 - For **SSR** (Next.js, Nuxt, etc.), the fallback path runs in Node.js.
   The impl object must not reference browser globals (`window`, `document`).
+
+## With Events
+
+justlink supports emitting events from the Worker to the main thread via the
+**factory pattern**. `expose` accepts either a plain object or a factory function
+that receives an `emit` parameter:
+
+### Worker entry with events
+
+```ts
+// worker-impl.ts — factory pattern
+import type { EmitFn, EventMap } from 'justlink/browser';
+
+type MyEvents = {
+    greeted: [data: { name: string; time: number }];
+    tick: [timestamp: number];
+};
+
+export function createEventImpl(emit: EmitFn<MyEvents>) {
+    return {
+        greet(name: string) {
+            emit('greeted', { name, time: Date.now() });
+            return `Hello, ${name}!`;
+        },
+        startTicker(ms: number) {
+            setInterval(() => emit('tick', Date.now()), ms);
+        },
+    };
+}
+```
+
+```ts
+// worker-runner.ts
+import { expose } from 'justlink/browser';
+import { createEventImpl } from './worker-impl';
+
+expose(self, emit => createEventImpl(emit));
+```
+
+### Event-aware universal factory
+
+```ts
+import type { RemoteApi } from 'justlink/browser';
+import type { EmitFn, EventMap } from 'justlink/browser';
+import type { EventImpl } from './worker-impl';
+
+export async function createEventWorker(): Promise<{
+    api: RemoteApi<EventImpl, MyEvents>;
+    emit?: EmitFn<MyEvents>; // only available in memory fallback mode
+}> {
+    if (typeof Worker !== 'undefined') {
+        const { wrap } = await import('justlink/browser');
+        const { default: WorkerFactory } = await import('./worker-event-runner?worker');
+        return { api: wrap<EventImpl, MyEvents>(new WorkerFactory()) };
+    }
+
+    const { createMemoryPair, expose, wrap } = await import('justlink/memory');
+    const { createEventImpl } = await import('./worker-impl');
+    const { host, worker } = createMemoryPair();
+    const emit = expose(worker, emit => createEventImpl(emit));
+    return { api: wrap<EventImpl, MyEvents>(host), emit };
+}
+```
+
+### Main thread — subscribe to events
+
+```ts
+const { api } = await createEventWorker();
+api.$on('tick', timestamp => console.log(timestamp));
+const unsub = api.$on('greeted', data => console.log(data));
+unsub(); // unsubscribe
+api.$once('tick', () => console.log('first tick only'));
+```
+
+> **Note:** In real Worker mode, `emit` lives inside the Worker and is not
+> accessible from the main thread. In memory fallback mode, `emit` is returned
+> alongside `api`.

@@ -24,4 +24,4 @@ const adapter: Adapter<NodeLikeContext> = [
 export const expose = createExpose(adapter);
 export const wrap = createWrap(adapter);
 
-export type { RemoteApi } from './core.ts';
+export type { RemoteApi, EmitFn, EventMap } from './core.ts';

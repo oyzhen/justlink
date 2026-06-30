@@ -3,7 +3,7 @@ import { createExpose, createWrap, type Adapter } from './core.ts';
 interface WorkerLikeContext {
     postMessage(data: unknown, transferList?: unknown[]): void;
     addEventListener(type: 'message', handler: (ev: MessageEvent) => void): void;
-    terminate(): void;
+    terminate?(): void;
 }
 
 const adapter: Adapter<WorkerLikeContext> = [
@@ -16,10 +16,10 @@ const adapter: Adapter<WorkerLikeContext> = [
         ctx.addEventListener('message', (ev: MessageEvent) => handler(ev.data as readonly unknown[]));
     },
     // terminate
-    ctx => Promise.resolve(ctx.terminate()),
+    ctx => Promise.resolve(ctx.terminate?.()),
 ];
 
 export const expose = createExpose(adapter);
 export const wrap = createWrap(adapter);
 
-export type { RemoteApi } from './core.ts';
+export type { RemoteApi, EmitFn, EventMap } from './core.ts';

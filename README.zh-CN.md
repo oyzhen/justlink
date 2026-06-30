@@ -30,16 +30,17 @@ const result = await api.fibonacci(40); // 就这么简单！
 
 ## 为什么选 justlink？
 
-|                  | justlink                      | 原生 postMessage    | Comlink |
-| ---------------- | ----------------------------- | ------------------- | ------- |
-| **代码量**       | 极少（2 个函数）              | 需要大量样板代码    | 较少    |
-| **TypeScript**   | ✅ 完整类型推导 + 自动补全    | ❌ 需要手动定义类型 | ✅      |
-| **依赖数**       | 0                             | 0                   | 1       |
-| **嵌套对象**     | ✅ 自动代理                   | ❌ 需要手动处理     | ✅      |
-| **Transferable** | ✅ 自动检测                   | ❌ 需要手动列举     | ✅      |
-| **`$eval`**      | ✅ 可在 Worker 内执行任意逻辑 | ❌                  | ❌      |
-| **Node.js**      | ✅ `worker_threads`           | ✅                  | ❌      |
-| **内存模式**     | ✅ 主线程/非 Worker 场景      | ❌                  | ❌      |
+|                  | justlink                           | 原生 postMessage    | Comlink |
+| ---------------- | ---------------------------------- | ------------------- | ------- |
+| **代码量**       | 极少（2 个函数）                   | 需要大量样板代码    | 较少    |
+| **TypeScript**   | ✅ 完整类型推导 + 自动补全         | ❌ 需要手动定义类型 | ✅      |
+| **依赖数**       | 0                                  | 0                   | 1       |
+| **嵌套对象**     | ✅ 自动代理                        | ❌ 需要手动处理     | ✅      |
+| **Transferable** | ✅ 自动检测                        | ❌ 需要手动列举     | ✅      |
+| **`$eval`**      | ✅ 可在 Worker 内执行任意逻辑      | ❌                  | ❌      |
+| **Node.js**      | ✅ `worker_threads`                | ✅                  | ❌      |
+| **内存模式**     | ✅ 主线程/非 Worker 场景           | ❌                  | ❌      |
+| **事件**         | ✅ `$on`/`$off`/`$once` + `emit()` | ❌                  | ❌      |
 
 ## 安装
 
@@ -67,7 +68,7 @@ import type { RemoteApi } from 'justlink/browser';
 core 模块（`justlink/core`）提供底层 API，用于构建自定义 Adapter：
 
 ```ts
-import { createExpose, createWrap, type Adapter, type RemoteApi } from 'justlink/core';
+import { createExpose, createWrap, type Adapter, type EmitFn, type EventMap, type RemoteApi } from 'justlink/core';
 ```
 
 ## 快速开始（5 分钟）
@@ -170,6 +171,38 @@ console.log(await api.increment(5)); // 5
 
 > 💡 **核心概念：** `expose` 是在 Worker 端"暴露"实现，`wrap` 是在主线程端"包装"成代理对象。两个函数配合使用，就完成了整个通信链路。
 
+### 第 4 步：监听事件（可选）
+
+如果 Worker 需要向主线程推送实时更新，可以使用 **工厂模式** 配合 `emit`：
+
+```ts
+// worker.ts — 工厂函数接收类型安全的 emit
+import { expose, type EmitFn, type EventMap } from 'justlink/browser';
+
+// 声明事件类型，两端共享
+type MyEvents = {
+    tick: [timestamp: number];
+};
+
+expose(self, (emit: EmitFn<MyEvents>) => ({
+    startTimer() {
+        setInterval(() => emit('tick', Date.now()), 1000);
+    },
+}));
+```
+
+```ts
+// main.ts — 订阅事件（类型自动推导）
+const api = wrap<Impl, MyEvents>(new MyWorker());
+
+api.$on('tick', timestamp => {
+    console.log('tick:', timestamp); // number
+});
+api.$on('typo', ...); // ❌ 编译错误
+```
+
+> 💡 `$on` 返回一个取消订阅函数。使用 `$once` 订阅单次事件，`$off` 移除特定 handler。
+
 ## 完整示例：在 Worker 中做计算
 
 下面是一个更实际的例子——把计算密集型任务放到 Worker 中：
@@ -229,7 +262,7 @@ console.log(stats.chars); // 9
 | `ctx`  | Worker 上下文。浏览器中是 `self`，Node.js 中是 `parentPort` |
 | `impl` | 要暴露的对象，包含属性和方法                                |
 
-### `wrap<Impl>(ctx): RemoteApi<Impl>`
+### `wrap<Impl, Events>(ctx): RemoteApi<Impl, Events>`
 
 **在主线程端调用。** 把 Worker 包装成一个类型安全的代理对象。
 
@@ -244,6 +277,9 @@ console.log(stats.chars); // 9
 | `api.$get(key)`              | 读取远程属性         | `await api.$get('name')`       |
 | `api.$exec(method, ...args)` | 动态调用方法         | `await api.$exec('add', 1, 2)` |
 | `api.$eval(callback, deps?)` | 在 Worker 内执行回调 | 见下方 `$eval` 章节            |
+| `api.$on(event, handler)`    | 订阅事件             | `api.$on('tick', handler)`     |
+| `api.$off(event, handler)`   | 移除事件 handler     | `api.$off('tick', handler)`    |
+| `api.$once(event, handler)`  | 订阅单次事件         | `api.$once('tick', handler)`   |
 | `api.$terminate()`           | 终止远程端           | `await api.$terminate()`       |
 
 > 💡 大多数情况下你不需要这些方法——直接 `await api.methodName(args)` 就够了。这些是"逃生舱"，用于动态方法名等特殊场景。
@@ -414,6 +450,82 @@ const sum = await api.$eval(ref => ref.a + ref.nested.a); // 4
 const counter = await api.$eval(ref => ref.createCounter(0));
 await counter.inc(); // postMessage 往返
 ```
+
+### 事件 — Worker → 主线程
+
+普通的 RPC 是由主线程发起的：你调用一个方法，然后等待结果。但有时候 **Worker 需要主动向你推送数据** — 实时更新、进度通知、周期性数据。这就是 **事件** 的用途。
+
+#### Worker 端 — 工厂模式
+
+`expose` 的第二个参数支持工厂函数。工厂接收类型安全的 `emit` 函数，返回实现对象：
+
+```ts
+// worker.ts
+import { expose, type EmitFn, type EventMap } from 'justlink/browser';
+
+// 声明事件映射，两端共享
+type MyEvents = {
+    tick: [timestamp: number];
+    progress: [data: { file: string; percent: number }];
+};
+
+expose(self, (emit: EmitFn<MyEvents>) => ({
+    // 方法可以在返回值的同时发射事件
+    processFile(name: string) {
+        emit('progress', { file: name, percent: 0 }); // ✅
+        emit('progress', { file: name, percent: 100 });
+        return { done: true };
+    },
+
+    // 周期性事件
+    startTimer() {
+        setInterval(() => emit('tick', Date.now()), 1000);
+    },
+}));
+```
+
+#### 主线程 — 订阅
+
+```ts
+const api = wrap<Impl, MyEvents>(new MyWorker());
+
+// $on — 订阅（返回取消订阅函数）
+const unsub = api.$on('tick', timestamp => {
+    console.log('tick:', timestamp); // number
+});
+
+// $once — 只触发一次，然后自动移除
+api.$once('progress', data => {
+    console.log('第一次进度:', data);
+});
+
+// $off — 移除特定 handler
+const handler = (data: unknown) => {
+    /* ... */
+};
+api.$on('progress', handler);
+api.$off('progress', handler);
+
+// 取消订阅
+unsub();
+```
+
+#### 工厂 vs 纯对象
+
+| 模式                               | 适用场景                   |
+| ---------------------------------- | -------------------------- |
+| `expose(ctx, { ... })`             | 简单的实现，不需要推送事件 |
+| `expose(ctx, (emit) => ({ ... }))` | 方法需要向主线程推送事件   |
+
+工厂模式**向后兼容** — 使用纯对象的现有代码无需任何更改。
+
+#### 事件参数传输
+
+事件参数走与 RPC 响应相同的传输管道：
+
+- 原始类型直接克隆
+- 包含函数的对象变为远程代理
+- Transferable 对象（ArrayBuffer、Uint8Array 等）自动检测
 
 ## 自定义传输层
 

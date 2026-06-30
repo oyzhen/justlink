@@ -122,7 +122,78 @@ type MyApi = RemoteApi<Impl>;
 | `api.$get(key)`              | Read a remote property dynamically             |
 | `api.$exec(method, ...args)` | Call a method by name                          |
 | `api.$eval(fn, deps?)`       | Run arbitrary code inside the Worker           |
+| `api.$on(event, handler)`    | Subscribe to events (returns unsubscribe fn)   |
+| `api.$off(event, handler)`   | Remove a specific event handler                |
+| `api.$once(event, handler)`  | Subscribe to an event once                     |
 | `api.$terminate()`           | Shut down the Worker, reject all pending calls |
+
+## Emitted Events
+
+justlink supports **push events** from the Worker (expose side) to the main
+thread (wrap side). This is useful for real-time updates, progress notifications,
+and periodic data — scenarios where the Worker needs to initiate communication.
+
+### Worker side — factory pattern
+
+`expose` accepts a factory function as its second argument. The factory receives
+an `emit` function and returns the implementation object:
+
+```ts
+// Declare event map for full type safety
+import type { EmitFn, EventMap } from 'justlink/browser';
+
+type MyEvents = {
+    tick: [timestamp: number];
+    progress: [data: { file: string; percent: number }];
+};
+
+expose(self, (emit: EmitFn<MyEvents>) => ({
+    startTimer() {
+        setInterval(() => emit('tick', Date.now()), 1000);
+    },
+    processFile(name: string) {
+        emit('progress', { file: name, percent: 0 }); // ✅ typed
+        emit('typo', ...); // ❌ compile error
+        // ... processing ...
+        emit('progress', { file: name, percent: 100 });
+        return { done: true };
+    },
+}));
+```
+
+### Main thread — subscribe to events
+
+```ts
+const api = wrap<Impl, MyEvents>(new MyWorker());
+
+// $on — returns an unsubscribe function
+const unsub = api.$on('tick', timestamp => {
+    console.log('tick:', timestamp);
+});
+unsub(); // stop listening
+
+// $once — fires once, then auto-removes
+api.$once('progress', data => {
+    console.log('first progress:', data);
+});
+
+// $off — remove a specific handler
+const handler = (data: unknown) => {
+    /* ... */
+};
+api.$on('progress', handler);
+api.$off('progress', handler);
+```
+
+### Factory vs Plain Object
+
+| Pattern                            | When to use                                         |
+| ---------------------------------- | --------------------------------------------------- |
+| `expose(ctx, { ... })`             | Simple impl with no event pushing needed            |
+| `expose(ctx, (emit) => ({ ... }))` | When methods need to push events to the main thread |
+
+The factory pattern is **backward-compatible** — existing code using plain objects
+continues to work without changes.
 
 ## Pitfalls
 

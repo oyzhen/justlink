@@ -1,165 +1,244 @@
 /**
- * Interactive demo — exercises the full public API of tinylink.
+ * Interactive demo — exercises the full public API of justlink.
  *
  * Open with `npm run dev` and watch the console.
  * Covers: $get, $exec, $eval, direct proxy access, nested objects,
  *         function returns, this-binding, async methods, error handling,
- *         Uint8Array transferables, and OffscreenCanvas.
+ *         Uint8Array transferables, OffscreenCanvas, events, and the
+ *         universal Worker / in-memory fallback pattern.
  */
-import { wrap } from '@/browser.ts';
-import type { Impl } from '../test/impl.ts';
-import DemoWorker from '../test/worker?worker';
+import { createUniversalWorker } from './create-universal-worker.ts';
+import { createEventWorker } from './create-event-worker.ts';
 
-document.body.innerHTML = '<h1>tinylink demo</h1>';
+const log = (label: string, ...args: unknown[]) => console.log(`[${label}]`, ...args);
 
-const api = wrap<Impl>(new DemoWorker());
-Object.assign(window, { api });
+async function runBasicDemo() {
+    log('BASIC', '--- Method calls, nested objects, returned objects ---');
+    const api = await createUniversalWorker();
 
-// ── $get / $exec: scalars, state mutation, clonable returns ────────
-console.log('api.$get("x")', await api.$get('x'));
-console.log('api.$get("counter")', await api.$get('counter'));
-console.log('api.$exec("add", 3, 7)', await api.$exec('add', 3, 7));
-console.log('api.$exec("increment", 5)', await api.$exec('increment', 5));
-console.log('api.$get("counter")', await api.$get('counter'));
+    // ── $get / $exec: scalars, state mutation, clonable returns ────
+    log('BASIC', 'api.$get("x")', await api.$get('x'));
+    log('BASIC', 'api.$get("counter")', await api.$get('counter'));
+    log('BASIC', 'api.$exec("add", 3, 7)', await api.$exec('add', 3, 7));
+    log('BASIC', 'api.$exec("increment", 5)', await api.$exec('increment', 5));
+    log('BASIC', 'api.$get("counter")', await api.$get('counter'));
 
-console.log('api.$exec("createObject")', await api.$exec('createObject'));
-console.log('api.$exec("createArray")', await api.$exec('createArray'));
-console.log('api.$exec("getProfile")', await api.$exec('getProfile'));
-console.log('api.$exec("getTree")', await api.$exec('getTree'));
-console.log('api.$exec("getDate")', await api.$exec('getDate'));
-console.log('api.$exec("getPattern")', await api.$exec('getPattern'));
+    log('BASIC', 'api.$exec("createObject")', await api.$exec('createObject'));
+    log('BASIC', 'api.$exec("createArray")', await api.$exec('createArray'));
+    log('BASIC', 'api.$exec("getProfile")', await api.$exec('getProfile'));
+    log('BASIC', 'api.$exec("getTree")', await api.$exec('getTree'));
+    log('BASIC', 'api.$exec("getDate")', await api.$exec('getDate'));
+    log('BASIC', 'api.$exec("getPattern")', await api.$exec('getPattern'));
 
-// ── typed arrays & transferables ───────────────────────────────────
-const typed = await api.$exec('createTypedArray');
-console.log('api.$exec("createTypedArray")', typed, Array.from(typed as Uint8Array));
+    // ── typed arrays & transferables ───────────────────────────────
+    const typed = await api.$exec('createTypedArray');
+    log('BASIC', 'api.$exec("createTypedArray")', typed, Array.from(typed as Uint8Array));
 
-const buf = new Uint8Array([10, 20, 30]);
-console.log('api.$exec("sumBytes", buf)', await api.$exec('sumBytes', buf));
-
-// ── OffscreenCanvas → ImageBitmap ──────────────────────────────────
-const canvas = new OffscreenCanvas(2, 2);
-const imageBitmap = await api.$exec('paintCanvas', canvas);
-console.log('api.$exec("paintCanvas")', imageBitmap);
-
-{
-    const el = document.createElement('canvas');
-    const ctx = el.getContext('bitmaprenderer');
-    ctx?.transferFromImageBitmap(imageBitmap as ImageBitmap);
-    document.body.appendChild(el);
-}
-
-// ── direct proxy property access ───────────────────────────────────
-console.log('api.x', await api.x);
-console.log('api.add(4, 5)', await api.add(4, 5));
-console.log('api.increment(1)', await api.increment(1));
-
-// ── nested object with methods ─────────────────────────────────────
-const math = await api.$get('math');
-console.log('math.value', await math.value);
-console.log('math.add(5)', await math.add(5));
-console.log('math.add(10)', await math.add(10));
-console.log('math.reset()', await math.reset());
-
-// direct proxy nested access
-const mathDirect = api.math;
-console.log('api.math.add(10)', await mathDirect.add(10));
-
-// ── $eval ──────────────────────────────────────────────────────────
-console.log('api.$eval(add)', await api.$eval(ref => ref.add(2, 3)));
-
-{
     const buf = new Uint8Array([10, 20, 30]);
-    console.log('api.$eval(sumBytes)', await api.$eval((ref, buf) => ref.sumBytes(buf), [buf]));
+    log('BASIC', 'api.$exec("sumBytes", buf)', await api.$exec('sumBytes', buf));
+
+    // ── OffscreenCanvas → ImageBitmap ──────────────────────────────
+    if (typeof OffscreenCanvas !== 'undefined') {
+        const canvas = new OffscreenCanvas(2, 2);
+        const imageBitmap = await api.$exec('paintCanvas', canvas);
+        log('BASIC', 'api.$exec("paintCanvas")', imageBitmap);
+
+        {
+            const el = document.createElement('canvas');
+            const ctx = el.getContext('bitmaprenderer');
+            ctx?.transferFromImageBitmap(imageBitmap as ImageBitmap);
+            document.body.appendChild(el);
+        }
+    }
+
+    // ── direct proxy property access ───────────────────────────────
+    log('BASIC', 'api.x', await api.x);
+    log('BASIC', 'api.add(4, 5)', await api.add(4, 5));
+    log('BASIC', 'api.increment(1)', await api.increment(1));
+
+    // ── nested object with methods ─────────────────────────────────
+    const math = await api.$get('math');
+    log('BASIC', 'math.value', await math.value);
+    log('BASIC', 'math.add(5)', await math.add(5));
+    log('BASIC', 'math.add(10)', await math.add(10));
+    log('BASIC', 'math.reset()', await math.reset());
+
+    // direct proxy nested access
+    const mathDirect = api.math;
+    log('BASIC', 'api.math.add(10)', await mathDirect.add(10));
+
+    // ── $eval ──────────────────────────────────────────────────────
+    log('BASIC', 'api.$eval(add)', await api.$eval(ref => ref.add(2, 3)));
+
+    {
+        const evalBuf = new Uint8Array([10, 20, 30]);
+        log('BASIC', 'api.$eval(sumBytes)', await api.$eval((ref, b) => ref.sumBytes(b), [evalBuf]));
+    }
+
+    // ── returned object with methods + this binding ────────────────
+    const obj = await api.$exec('fn2');
+    log('BASIC', 'fn2.a', await obj.a);
+    log('BASIC', 'fn2.inc(3)', await obj.inc(3));
+
+    // ── createCounter (methods + async) ────────────────────────────
+    const counter = await api.$exec('createCounter', 10);
+    log('BASIC', 'counter.inc()', await counter.inc());
+    log('BASIC', 'counter.inc()', await counter.inc());
+    log('BASIC', 'counter.dec()', await counter.dec());
+    log('BASIC', 'counter.get()', await counter.get());
+    log('BASIC', 'counter.getAsync()', await counter.getAsync());
+
+    // counter via direct proxy
+    const counter2 = await api.createCounter(10);
+    log(
+        'BASIC',
+        'counter2.$eval(inc+get)',
+        await counter2.$eval(ref => {
+            ref.inc();
+            return ref.get();
+        }),
+    );
+    log(
+        'BASIC',
+        'counter2.$eval(async)',
+        await counter2.$eval(async ref => {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            ref.inc();
+            return ref.getAsync();
+        }),
+    );
+
+    // ── standalone function return ─────────────────────────────────
+    const adder = await api.$exec('getAdder');
+    log('BASIC', 'adder(2, 3)', await adder(2, 3));
+
+    // ── Map / Set returns ──────────────────────────────────────────
+    log('BASIC', 'api.$exec("getMap")', await api.$exec('getMap'));
+    log('BASIC', 'api.$exec("getSet")', await api.$exec('getSet'));
+
+    // ── error handling ─────────────────────────────────────────────
+    try {
+        await api.$exec('throwError');
+    } catch (err) {
+        log('BASIC', 'throwError caught:', err);
+    }
+
+    try {
+        await api.$exec('throwString');
+    } catch (err) {
+        log('BASIC', 'throwString caught:', err);
+    }
+
+    try {
+        await api.$exec('throwNull');
+    } catch (err) {
+        log('BASIC', 'throwNull caught:', err);
+    }
+
+    try {
+        await api.$exec('throwObjectWithStack');
+    } catch (err) {
+        log('BASIC', 'throwObjectWithStack caught:', err);
+    }
+
+    try {
+        await api.$exec('rejectAsync');
+    } catch (err) {
+        log('BASIC', 'rejectAsync caught:', err);
+    }
+
+    // ── $eval error propagation ────────────────────────────────────
+    try {
+        await api.$eval(() => {
+            throw new Error('eval error');
+        });
+    } catch (err) {
+        log('BASIC', 'eval error caught:', err);
+    }
+
+    // ── array of functions ─────────────────────────────────────────
+    const fns = await api.$exec('getFunctions');
+    log('BASIC', 'getFunctions:', fns);
+    log('BASIC', 'fns[0](5)', await fns[0](5));
+
+    const fns2 = await api.getFunctions();
+    log('BASIC', 'getFunctions (direct proxy):', fns2);
+    log('BASIC', 'fns2[1](5)', await fns2[1](5));
+
+    // ── terminate ──────────────────────────────────────────────────
+    await api.$terminate();
+    log('BASIC', '--- terminated ---');
 }
 
-// ── returned object with methods + this binding ────────────────────
-const obj = await api.$exec('fn2');
-console.log('fn2.a', await obj.a);
-console.log('fn2.inc(3)', await obj.inc(3));
+async function runEventDemo() {
+    log('EVENT', '--- Factory pattern + event listening ---');
+    const { api } = await createEventWorker();
 
-// ── createCounter (methods + async) ────────────────────────────────
-const counter = await api.$exec('createCounter', 10);
-console.log('counter.inc()', await counter.inc());
-console.log('counter.inc()', await counter.inc());
-console.log('counter.dec()', await counter.dec());
-console.log('counter.get()', await counter.get());
-console.log('counter.getAsync()', await counter.getAsync());
+    // $on — subscribe to events
+    const unsubs: (() => void)[] = [];
 
-// counter via direct proxy
-const counter2 = await api.createCounter(10);
-console.log(
-    'counter2.$eval(inc+get)',
-    await counter2.$eval(ref => {
-        ref.inc();
-        return ref.get();
-    }),
-);
-console.log(
-    'counter2.$eval(async)',
-    await counter2.$eval(async ref => {
-        await new Promise(resolve => setTimeout(resolve, 50));
-        ref.inc();
-        return ref.getAsync();
-    }),
-);
+    unsubs.push(
+        api.$on('greeted', data => {
+            log('EVENT', '📢 greeted:', data);
+        }),
+    );
 
-// ── standalone function return ─────────────────────────────────────
-const adder = await api.$exec('getAdder');
-console.log('adder(2, 3)', await adder(2, 3));
+    unsubs.push(
+        api.$on('computed', data => {
+            log('EVENT', '📢 computed:', data);
+        }),
+    );
 
-// ── Map / Set returns ──────────────────────────────────────────────
-console.log('api.$exec("getMap")', await api.$exec('getMap'));
-console.log('api.$exec("getSet")', await api.$exec('getSet'));
+    unsubs.push(
+        api.$on('tick', data => {
+            log('EVENT', '📢 tick:', data);
+        }),
+    );
 
-// ── error handling ─────────────────────────────────────────────────
-try {
-    await api.$exec('throwError');
-} catch (err) {
-    console.error('throwError caught:', err);
-}
+    unsubs.push(
+        api.$on('ticker-started', data => {
+            log('EVENT', '📢 ticker-started:', data);
+        }),
+    );
 
-try {
-    await api.$exec('throwString');
-} catch (err) {
-    console.error('throwString caught:', err);
-}
+    unsubs.push(
+        api.$on('ticker-stopped', data => {
+            log('EVENT', '📢 ticker-stopped:', data);
+        }),
+    );
 
-try {
-    await api.$exec('throwNull');
-} catch (err) {
-    console.error('throwNull caught:', err);
-}
+    // methods that emit events
+    log('EVENT', 'greet("Alice") →', await api.greet('Alice'));
+    log('EVENT', 'add(3, 4) →', await api.add(3, 4));
+    log('EVENT', 'math.multiply(5, 6) →', await api.math.multiply(5, 6));
 
-try {
-    await api.$exec('throwObjectWithStack');
-} catch (err) {
-    console.error('throwObjectWithStack caught:', err);
-}
-
-try {
-    await api.$exec('rejectAsync');
-} catch (err) {
-    console.error('rejectAsync caught:', err);
-}
-
-// ── $eval error propagation ────────────────────────────────────────
-try {
-    await api.$eval(() => {
-        throw new Error('eval error');
+    // $once — fires only once
+    let onceCount = 0;
+    api.$once('computed', () => {
+        onceCount++;
     });
-} catch (err) {
-    console.error('eval error caught:', err);
+    await api.add(1, 2); // onceCount = 1
+    await api.add(3, 4); // onceCount still 1
+    log('EVENT', 'once count after 2 adds:', onceCount);
+
+    // start ticker — periodic events
+    await api.startTicker(500);
+    await new Promise(r => setTimeout(r, 2200));
+    await api.stopTicker();
+
+    // unsubscribe all
+    for (const unsub of unsubs) {
+        unsub();
+    }
+
+    // returned object still works
+    const counter = await api.createCounter(0);
+    log('EVENT', 'counter.inc() →', await counter.inc());
+
+    await api.$terminate();
+    log('EVENT', '--- terminated ---');
 }
 
-// ── array of functions ─────────────────────────────────────────────
-const fns = await api.$exec('getFunctions');
-console.log('getFunctions:', fns);
-console.log('fns[0](5)', await fns[0](5));
-
-const fns2 = await api.getFunctions();
-console.log('getFunctions (direct proxy):', fns2);
-console.log('fns2[1](5)', await fns2[1](5));
-
-// ── done ───────────────────────────────────────────────────────────
-console.log('demo complete');
-// await api.$terminate();
+await runBasicDemo();
+await runEventDemo();
+log('DONE', 'All demos completed!');

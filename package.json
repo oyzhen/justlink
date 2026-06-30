@@ -1,6 +1,6 @@
 {
     "name": "justlink",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Type-safe RPC for Workers, threads, and beyond — zero deps, local-feel calls.",
     "license": "MIT",
     "author": "oyzhen",
@@ -76,9 +76,9 @@
         "preview": "vite preview",
         "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
         "lint": "eslint . --fix",
-        "test": "vitest run --config=vitest.config.ts --coverage && vitest run --config=vitest.browser.config.ts --coverage",
+        "test": "tsc --noEmit && vitest run --config=vitest.config.ts --coverage && vitest run --config=vitest.browser.config.ts --coverage",
         "test:browser": "vitest run --config=vitest.browser.config.ts --coverage",
-        "prepublishOnly": "npm run lint && npm run build && npm test",
+        "prepublishOnly": "npm run lint && npm test && npm run build",
         "prepare": "husky"
     },
     "lint-staged": {

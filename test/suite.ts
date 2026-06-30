@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import type { RemoteApi } from '@/core.ts';
+import { describe, expect, it, vi } from 'vitest';
+import type { EmitFn, RemoteApi } from '@/core.ts';
+import type { EventImpl } from './event-impl.ts';
 import type { Impl } from './impl.ts';
 
 export interface ApiHandle {
@@ -507,6 +508,161 @@ export function runImplSuite(createApi: CreateApi) {
                 if (result instanceof Error) {
                     expect(result.message).toBe('The remote peer has been terminated');
                 }
+            } finally {
+                await cleanup().catch(() => {});
+            }
+        });
+    });
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Event test suite — exercises the EVENT wire tag, $on / $off / $once,
+// and the factory pattern for createExpose.
+// ════════════════════════════════════════════════════════════════════
+
+export interface EventApiHandle {
+    api: RemoteApi<EventImpl>;
+    emit: EmitFn;
+    cleanup: () => Promise<void>;
+}
+
+export type CreateEventApi = () => EventApiHandle;
+
+export function runEventSuite(createEventApi: CreateEventApi) {
+    // Browser workers need extra time for the double round-trip:
+    // main→worker (RPC) → worker sends EVENT → main receives.
+    const WAIT = 200;
+
+    describe('events', () => {
+        it('basic event emission', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const spy = vi.fn();
+                api.$on('ping', spy);
+                emit('ping');
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('event with payload', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const spy = vi.fn();
+                api.$on('data', spy);
+                emit('data', { x: 1 }, 'text');
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1);
+                expect(spy).toHaveBeenCalledWith({ x: 1 }, 'text');
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('multiple handlers for the same event', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const spy1 = vi.fn();
+                const spy2 = vi.fn();
+                api.$on('multi', spy1);
+                api.$on('multi', spy2);
+                emit('multi', 42);
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy1).toHaveBeenCalledWith(42);
+                expect(spy2).toHaveBeenCalledWith(42);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('$once fires only once', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const spy = vi.fn();
+                api.$once('once-event', spy);
+                emit('once-event', 'first');
+                await new Promise(r => setTimeout(r, WAIT));
+                emit('once-event', 'second');
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1);
+                expect(spy).toHaveBeenCalledWith('first');
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('$off removes handler', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const spy = vi.fn();
+                api.$on('off-event', spy);
+                emit('off-event', 1);
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1);
+
+                api.$off('off-event', spy);
+                emit('off-event', 2);
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1); // not called again
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('$on returns unsubscribe function', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const spy = vi.fn();
+                const unsub = api.$on('unsub-event', spy);
+                emit('unsub-event');
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1);
+
+                unsub();
+                emit('unsub-event');
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledTimes(1); // not called again
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('concurrent events fire in order', async () => {
+            const { api, emit, cleanup } = createEventApi();
+            try {
+                const received: number[] = [];
+                api.$on('ordered', (n: unknown) => received.push(n as number));
+                emit('ordered', 1);
+                emit('ordered', 2);
+                emit('ordered', 3);
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(received).toEqual([1, 2, 3]);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('emitManually via $exec fires event', async () => {
+            const { api, cleanup } = createEventApi();
+            try {
+                const spy = vi.fn();
+                api.$on('manual', spy);
+                await api.emitManually('manual', 'hello', 42);
+                await new Promise(r => setTimeout(r, WAIT));
+                expect(spy).toHaveBeenCalledWith('hello', 42);
+            } finally {
+                await cleanup();
+            }
+        });
+
+        it('event after terminate does not crash', async () => {
+            const { emit, cleanup } = createEventApi();
+            try {
+                await cleanup();
+                // Emitting after terminate should be silently ignored
+                expect(() => emit('post-term')).not.toThrow();
             } finally {
                 await cleanup().catch(() => {});
             }

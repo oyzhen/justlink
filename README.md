@@ -39,6 +39,7 @@ No `postMessage`. No `onmessage`. No manual serialization. Just `expose` and `wr
 | **`$eval`**        | ✅ Run arbitrary logic in the Worker | ❌                  | ❌      |
 | **Node.js**        | ✅ `worker_threads`                  | ✅                  | ❌      |
 | **In-memory mode** | ✅ Main thread / non-Worker          | ❌                  | ❌      |
+| **Events**         | ✅ `$on`/`$off`/`$once` + `emit()`   | ❌                  | ❌      |
 
 ## Install
 
@@ -66,7 +67,7 @@ import type { RemoteApi } from 'justlink/browser';
 The core module (`justlink/core`) exposes low-level APIs for building custom adapters:
 
 ```ts
-import { createExpose, createWrap, type Adapter, type RemoteApi } from 'justlink/core';
+import { createExpose, createWrap, type Adapter, type EmitFn, type EventMap, type RemoteApi } from 'justlink/core';
 ```
 
 ## Quick Start (5 minutes)
@@ -169,6 +170,32 @@ console.log(await api.increment(5)); // 5
 
 > 💡 **Core concept:** `expose` is called on the Worker side to "expose" the implementation. `wrap` is called on the main thread to "wrap" it into a proxy object. Together they form the full communication link.
 
+### Step 4: Listen to Events (optional)
+
+If your Worker needs to push real-time updates to the main thread, use the **factory pattern** with `emit`:
+
+```ts
+// worker.ts — factory receives emit function
+import { expose, type EmitFn } from 'justlink/browser';
+
+expose(self, (emit: EmitFn) => ({
+    startTimer() {
+        setInterval(() => emit('tick', Date.now()), 1000);
+    },
+}));
+```
+
+```ts
+// main.ts — subscribe to events
+const api = wrap<Impl>(new MyWorker());
+
+api.$on('tick', timestamp => {
+    console.log('tick:', timestamp); // "tick: 1700000000000"
+});
+```
+
+> 💡 `$on` returns an unsubscribe function. Use `$once` for single-fire events, `$off` to remove a handler.
+
 ## Full Example: Heavy Computation in Workers
 
 A more realistic example — offloading CPU-intensive tasks to a Worker:
@@ -228,7 +255,7 @@ console.log(stats.chars); // 9
 | `ctx`  | Worker context. `self` in the browser, `parentPort` in Node.js |
 | `impl` | Object to expose, with properties and methods                  |
 
-### `wrap<Impl>(ctx): RemoteApi<Impl>`
+### `wrap<Impl, Events>(ctx): RemoteApi<Impl, Events>`
 
 **Called on the main thread.** Wraps the Worker into a type-safe proxy object.
 
@@ -243,6 +270,9 @@ The returned `api` has these special methods:
 | `api.$get(key)`              | Read a remote property           | `await api.$get('name')`       |
 | `api.$exec(method, ...args)` | Dynamically call a method        | `await api.$exec('add', 1, 2)` |
 | `api.$eval(callback, deps?)` | Run a callback inside the Worker | See `$eval` section below      |
+| `api.$on(event, handler)`    | Subscribe to an event            | `api.$on('tick', handler)`     |
+| `api.$off(event, handler)`   | Remove an event handler          | `api.$off('tick', handler)`    |
+| `api.$once(event, handler)`  | Subscribe to an event once       | `api.$once('tick', handler)`   |
 | `api.$terminate()`           | Terminate the remote peer        | `await api.$terminate()`       |
 
 > 💡 Most of the time you don't need these — just `await api.methodName(args)`. They're escape hatches for special cases like dynamic method names.
@@ -412,6 +442,86 @@ const sum = await api.$eval(ref => ref.a + ref.nested.a); // 4
 const counter = await api.$eval(ref => ref.createCounter(0));
 await counter.inc(); // postMessage round-trip
 ```
+
+### Events — Worker → Main Thread
+
+Regular RPC is main-thread-initiated: you call a method and wait for the result.
+But sometimes the **Worker needs to push data to you** — real-time updates, progress
+notifications, periodic ticks. That's what **events** are for.
+
+#### Worker side — factory pattern
+
+`expose` accepts a factory function as its second argument. The factory receives
+an `emit` function and returns the implementation object:
+
+```ts
+// worker.ts
+import { expose, type EmitFn, type EventMap } from 'justlink/browser';
+
+type MyEvents = {
+    tick: [timestamp: number];
+    progress: [data: { file: string; percent: number }];
+};
+
+expose(self, (emit: EmitFn<MyEvents>) => ({
+    // Methods can emit events while still returning values
+    processFile(name: string) {
+        emit('progress', { file: name, percent: 0 });
+        // ... processing ...
+        emit('progress', { file: name, percent: 100 });
+        return { done: true };
+    },
+
+    // Periodic events
+    startTimer() {
+        setInterval(() => emit('tick', Date.now()), 1000);
+    },
+}));
+```
+
+#### Main thread — subscribe
+
+```ts
+const api = wrap<Impl, MyEvents>(new MyWorker());
+
+// $on — subscribe (returns unsubscribe function)
+const unsub = api.$on('tick', timestamp => {
+    console.log('tick:', timestamp);
+});
+
+// $once — fires once, then auto-removes
+api.$once('progress', data => {
+    console.log('first progress:', data);
+});
+
+// $off — remove a specific handler
+const handler = (data: unknown) => {
+    /* ... */
+};
+api.$on('progress', handler);
+api.$off('progress', handler);
+
+// Unsubscribe
+unsub();
+```
+
+#### Factory vs Plain Object
+
+| Pattern                            | When to use                                         |
+| ---------------------------------- | --------------------------------------------------- |
+| `expose(ctx, { ... })`             | Simple impl with no event pushing needed            |
+| `expose(ctx, (emit) => ({ ... }))` | When methods need to push events to the main thread |
+
+The factory pattern is **backward-compatible** — existing code using plain objects
+continues to work without changes.
+
+#### Event args transport
+
+Event arguments go through the same transport pipeline as RPC responses:
+
+- Primitives are cloned directly
+- Objects with functions become remote proxies
+- Transferables (ArrayBuffer, Uint8Array, etc.) are auto-detected
 
 ## Custom Transport Layer
 

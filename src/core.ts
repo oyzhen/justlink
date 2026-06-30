@@ -61,15 +61,34 @@ type RemotePropertyValue<T> = T extends Record<string, unknown> ? RemoteObject<T
 // === Public types ===
 
 /**
+ * EventMap: the constraint for typed events.
+ * Users define their event map as `{ eventName: [...argTypes] }`.
+ *
+ * @example
+ * type MyEvents = {
+ *     tick: [count: number, time: number];
+ *     greeted: [data: { name: string }];
+ * };
+ */
+
+export type EventMap = Record<string, unknown[]>;
+
+/**
  * RemoteControl: low-level escape hatches available on every remote object.
  *   $get / $exec / $eval operate on the ref of *this* sub-object,
  *   so callers can drive method calls without relying on the proxy layout.
+ *
+ * The `Events` generic provides type-safe event subscriptions:
+ *   $on / $off / $once are constrained to declared event names and argument types.
  */
-type RemoteControl<T extends Record<string, unknown>> = {
+type RemoteControl<T extends Record<string, unknown>, Events extends EventMap = EventMap> = {
     $get<K extends keyof T>(key: K): Promise<RemoteValue<T[K]>>;
     $exec<K extends MethodKeys<T>>(method: K, ...args: SafeParameters<T[K]>): ExecReturnType<T[K]>;
     $eval<R>(callback: (ref: T) => R): Promise<R>;
     $eval<A extends unknown[], R>(callback: (ref: T, ...args: A) => R, deps?: A): Promise<R>;
+    $on<K extends keyof Events & string>(eventName: K, handler: (...args: Events[K]) => void): () => void;
+    $off<K extends keyof Events & string>(eventName: K, handler: (...args: Events[K]) => void): void;
+    $once<K extends keyof Events & string>(eventName: K, handler: (...args: Events[K]) => void): void;
 };
 
 /**
@@ -77,22 +96,32 @@ type RemoteControl<T extends Record<string, unknown>> = {
  *   - methods are callable directly (returning Promise<Awaited<ReturnType<...>>>)
  *   - non-method properties resolve to a promise of the remote value
  *   - $get / $exec / $eval for low-level access
+ *
+ * The `Events` generic propagates type-safe event subscriptions from the
+ * top-level RemoteApi down through the type hierarchy.
  */
-export type RemoteObject<T extends Record<string, unknown>> = {
+export type RemoteObject<T extends Record<string, unknown>, Events extends EventMap = EventMap> = {
     [K in keyof T as T[K] extends (...args: readonly any[]) => any ? K : never]: RemoteMethodValue<T[K]>;
 } & {
     [K in keyof T as T[K] extends (...args: readonly any[]) => any ? never : K]: RemotePropertyValue<T[K]>;
-} & RemoteControl<T>;
+} & RemoteControl<T, Events>;
 
 /** The proxy interface exposed to consumers. */
-export type RemoteApi<Impl extends Record<string, unknown>> = RemoteObject<Impl> & {
+export type RemoteApi<Impl extends Record<string, unknown>, Events extends EventMap = EventMap> = RemoteObject<Impl, Events> & {
     $terminate(): Promise<void>;
 };
+
+/** EmitFn: the function exposed by createExpose for pushing events to the wrap side. */
+export type EmitFn<Events extends EventMap = EventMap> = <K extends keyof Events & string>(eventName: K, ...args: Events[K]) => void;
+
+/** Factory function signature: receives emit, returns the implementation object. */
+export type ExposeFactory<Events extends EventMap = EventMap> = (emit: EmitFn<Events>) => Record<string, unknown>;
 
 // === Wire protocol ===
 
 const REQUEST = 'm$s';
 const RESPONSE = 'm$r';
+const EVENT = 'm$e';
 const OP_GET = 0 as const;
 const OP_EXEC = 1 as const;
 const OP_EVAL = 2 as const;
@@ -118,7 +147,7 @@ export type Adapter<Ctx> = [
 
 export const createExpose =
     <Ctx>([emit, listen]: Adapter<Ctx>) =>
-    (ctx: Ctx, impl: Record<string, unknown>): void => {
+    (ctx: Ctx, impl: Record<string, unknown> | ExposeFactory): EmitFn => {
         const refs = new Map<number, unknown>();
         let nextRef = 1; // 0 is reserved for the root `impl`
 
@@ -200,6 +229,14 @@ export const createExpose =
             });
         };
 
+        const emitEvent: EmitFn = (eventName: string, ...args: unknown[]) => {
+            const values = args.map(a => toTransportValue(a));
+            const transferList = mergeTransferables(...values.map(v => collectTransferables(v)));
+            emit(ctx, [EVENT, eventName, ...values] as readonly unknown[], transferList);
+        };
+
+        const resolvedImpl: Record<string, unknown> = typeof impl === 'function' ? (impl as ExposeFactory)(emitEvent) : impl;
+
         listen(ctx, data => {
             if ((data as any)?.[0] !== REQUEST) {
                 return;
@@ -208,7 +245,7 @@ export const createExpose =
             const [, rawId, rawOp, refId, payload] = data as [string, number, number, number, unknown];
             const id = rawId;
             const op = rawOp as typeof OP_GET | typeof OP_EXEC | typeof OP_EVAL;
-            const target = refId === 0 ? impl : refs.get(refId);
+            const target = refId === 0 ? resolvedImpl : refs.get(refId);
 
             if (target == null) {
                 sendResponse(id, true, `Invalid ref ID: ${refId}`);
@@ -258,13 +295,15 @@ export const createExpose =
                 refs.delete(refId);
             }
         });
+
+        return emitEvent;
     };
 
 // === createWrap ===
 
 export const createWrap =
     <Ctx>(adapter: Adapter<Ctx>) =>
-    <Impl extends Record<string, unknown>>(ctx: Ctx): RemoteApi<Impl> => {
+    <Impl extends Record<string, unknown>, Events extends EventMap = EventMap>(ctx: Ctx): RemoteApi<Impl, Events> => {
         const [emit, listen, doTerminate] = adapter;
         const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
         const TERMINATED_ERROR = new Error('The remote peer has been terminated');
@@ -398,7 +437,36 @@ export const createWrap =
                                 reject(TERMINATED_ERROR);
                             }
                             pending.clear();
+                            eventHandlers.clear();
                             return doTerminate(ctx);
+                        };
+                    }
+                    if (prop === '$on') {
+                        return (eventName: string, handler: (...args: unknown[]) => void) => {
+                            if (!eventHandlers.has(eventName)) {
+                                eventHandlers.set(eventName, new Set());
+                            }
+                            eventHandlers.get(eventName)!.add(handler);
+                            return () => {
+                                eventHandlers.get(eventName)?.delete(handler);
+                            };
+                        };
+                    }
+                    if (prop === '$off') {
+                        return (eventName: string, handler: (...args: unknown[]) => void) => {
+                            eventHandlers.get(eventName)?.delete(handler);
+                        };
+                    }
+                    if (prop === '$once') {
+                        return (eventName: string, handler: (...args: unknown[]) => void) => {
+                            if (!eventHandlers.has(eventName)) {
+                                eventHandlers.set(eventName, new Set());
+                            }
+                            const wrapper = (...args: unknown[]) => {
+                                eventHandlers.get(eventName)?.delete(wrapper);
+                                handler(...args);
+                            };
+                            eventHandlers.get(eventName)!.add(wrapper);
                         };
                     }
                     if (prop === 'then' || prop === 'catch' || prop === 'finally') {
@@ -439,6 +507,20 @@ export const createWrap =
             return fallback;
         };
 
+        const eventHandlers = new Map<string, Set<(...args: unknown[]) => void>>();
+
+        const resolveValue = (value: unknown): unknown => {
+            if (Array.isArray(value)) {
+                return value.map(item => resolveValue(item));
+            }
+            if (isRef(value)) {
+                return value.__kind === 'function'
+                    ? proxyFor(value.__ref, 'fn', typeof value.__this === 'number' ? value.__this : undefined)
+                    : proxyFor(value.__ref, 'obj');
+            }
+            return value;
+        };
+
         const request = (
             op: typeof OP_GET | typeof OP_EXEC | typeof OP_EVAL,
             refId: number,
@@ -450,18 +532,6 @@ export const createWrap =
             }
             const id = nextId();
             return new Promise((resolve, reject) => {
-                const resolveValue = (value: unknown): unknown => {
-                    if (Array.isArray(value)) {
-                        return value.map(item => resolveValue(item));
-                    }
-                    if (isRef(value)) {
-                        return value.__kind === 'function'
-                            ? proxyFor(value.__ref, 'fn', typeof value.__this === 'number' ? value.__this : undefined)
-                            : proxyFor(value.__ref, 'obj');
-                    }
-                    return value;
-                };
-
                 pending.set(id, {
                     resolve: (result: unknown) => {
                         resolve(resolveValue(result));
@@ -473,23 +543,36 @@ export const createWrap =
         };
 
         listen(ctx, data => {
-            if ((data as any)?.[0] !== RESPONSE) {
-                return;
-            }
-            const [, rawId, err, result] = data as [string, number, boolean, unknown];
-            const rec = pending.get(rawId);
-            if (rec == null) {
-                return;
-            }
-            pending.delete(rawId);
-            if (err) {
-                rec.reject(new Error(String(result)));
-            } else {
-                rec.resolve(result);
+            const tag = (data as any)?.[0];
+            if (tag === RESPONSE) {
+                const [, rawId, err, result] = data as [string, number, boolean, unknown];
+                const rec = pending.get(rawId);
+                if (rec == null) {
+                    return;
+                }
+                pending.delete(rawId);
+                if (err) {
+                    rec.reject(new Error(String(result)));
+                } else {
+                    rec.resolve(result);
+                }
+            } else if (tag === EVENT) {
+                const [, eventName, ...args] = data as [string, string, ...unknown[]];
+                const handlers = eventHandlers.get(eventName);
+                if (handlers) {
+                    const resolved = args.map(a => resolveValue(a));
+                    for (const handler of handlers) {
+                        try {
+                            handler(...resolved);
+                        } catch {
+                            // Swallow handler errors — don't crash the connection
+                        }
+                    }
+                }
             }
         });
 
-        return proxyFor(0, 'api') as RemoteApi<Impl>;
+        return proxyFor(0, 'api') as RemoteApi<Impl, Events>;
     };
 
 function isTransferable(value: unknown): value is Transferable {
